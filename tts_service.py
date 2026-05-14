@@ -1,5 +1,6 @@
 """MiMo TTS Service Module - 支持预置音色和音色复刻"""
 
+import gc
 import logging
 from typing import Any, Optional
 
@@ -61,7 +62,10 @@ class MiMoTTSService:
             "Content-Type": "application/json",
         }
 
-        return await self._do_request(payload, headers)
+        result = await self._do_request(payload, headers)
+        del payload, messages
+        gc.collect()
+        return result
 
     async def synthesize_with_voice_clone(
         self,
@@ -102,7 +106,10 @@ class MiMoTTSService:
             "Content-Type": "application/json",
         }
 
-        return await self._do_request(payload, headers)
+        result = await self._do_request(payload, headers)
+        del payload, messages, voice_str
+        gc.collect()
+        return result
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建复用的 ClientSession"""
@@ -145,10 +152,12 @@ class MiMoTTSService:
                 if not audio_base64:
                     return {"success": False, "error": "Empty audio"}
 
+                text_content = payload["messages"][-1]["content"]
+                del result, choices, message, audio_data
                 return {
                     "success": True,
                     "audio_base64": audio_base64,
-                    "text": payload["messages"][-1]["content"],
+                    "text": text_content,
                 }
 
         except aiohttp.ClientError as e:

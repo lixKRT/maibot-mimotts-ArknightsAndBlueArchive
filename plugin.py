@@ -143,11 +143,14 @@ class AIVoicePlugin(MaiBotPlugin):
         return ""
 
     async def _send_voice(self, audio_b64: str, stream_id: str) -> bool:
-        """Send voice message using base64 format."""
+        """Send voice message using base64 format.
+        注意: 调用后 audio_b64 会被消费，不再可用。
+        """
         self.ctx.logger.info("Sending voice to stream=%s, b64_len=%d", stream_id, len(audio_b64))
 
-        # Use base64:// format - works across containers
         b64_url = f"base64://{audio_b64}"
+        # 原始引用可以释放（如果调用方已 del 则无额外效果，但作为安全措施）
+        audio_b64 = ""
 
         # Method 1: record type with base64 (NapCat standard for voice)
         try:
@@ -210,7 +213,7 @@ class AIVoicePlugin(MaiBotPlugin):
         if not text or not text.strip():
             return {"success": False, "error": "Empty text"}
 
-        voice_key, audio_base64, mode = self._resolve_voice(voice_name)
+        voice_key, ref_audio, mode = self._resolve_voice(voice_name)
         if not voice_key:
             return {"success": False, "error": "No voice configured. Check voice config."}
 
@@ -219,22 +222,36 @@ class AIVoicePlugin(MaiBotPlugin):
         try:
             if mode == "clone":
                 result = await self.tts_service.synthesize_with_voice_clone(
-                    text=text, reference_audio_base64=audio_base64, style_instruction=style_instruction,
+                    text=text, reference_audio_base64=ref_audio, style_instruction=style_instruction,
                 )
             else:
                 result = await self.tts_service.synthesize_with_preset(
                     text=text, voice_id=voice_key, style_instruction=style_instruction,
                 )
 
-            self.ctx.logger.info("TTS result: success=%s, audio_len=%d, error=%s",
-                result.get("success"), len(result.get("audio_base64", "")), result.get("error", ""))
+            # 释放参考音频引用
+            ref_audio = ""
 
-            if result.get("success") and stream_id:
-                api_audio = result.get("audio_base64", "")
-                if "base64," in api_audio:
-                    api_audio = api_audio.split("base64,", 1)[1]
-                api_audio = api_audio.strip()
-                await self._send_voice(api_audio, stream_id)
+            success = result.get("success")
+            error = result.get("error", "")
+            audio_b64 = result.get("audio_base64", "")
+            self.ctx.logger.info("TTS result: success=%s, audio_len=%d, error=%s", success, len(audio_b64), error)
+
+            if success and audio_b64 and stream_id:
+                # 提取纯 base64 数据
+                if "base64," in audio_b64:
+                    audio_b64 = audio_b64.split("base64,", 1)[1]
+                    audio_b64 = audio_b64.strip()
+
+                # 立即从 result 中移除大字段，避免双重内存占用
+                result.pop("audio_base64", None)
+
+                await self._send_voice(audio_b64, stream_id)
+                audio_b64 = ""
+            elif audio_b64:
+                # 不需要发送时也清理
+                result.pop("audio_base64", None)
+
             return result
         except Exception as e:
             self.ctx.logger.error("TTS failed: %s", e)
