@@ -28,8 +28,11 @@ class VoiceSectionConfig(PluginConfigBase):
         description="MiMo API地址",
         json_schema_extra={"label": "API地址"},
     )
+    voice_mode: str = Field(default="clone", description="语音模式: 'clone'(音色复刻) 或 'preset'(预置音色)")
+    preset_voice: str = Field(default="mimo_default", description="预置音色ID（仅preset模式生效）")
     voices_dir: str = Field(default="voices", description="音色目录路径（相对于插件目录）")
-    default_voice: str = Field(default="", description="默认音色名称")
+    default_voice: str = Field(default="", description="默认音色名称（clone模式下为音频文件名）")
+    clone_voice: str = Field(default="", description="复刻音色文件名（clone模式下优先使用）")
 
 
 class VoicePluginConfig(PluginConfigBase):
@@ -52,9 +55,10 @@ class AIVoicePlugin(MaiBotPlugin):
         if not api_key:
             self.ctx.logger.warning("MiMo API Key not configured")
         self.tts_service = MiMoTTSService(api_key=api_key, api_base_url=self.config.voice.api_base_url, logger=self.ctx.logger)
-        self.default_voice = self.config.voice.default_voice
+        self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
         await self._load_voices()
-        self.ctx.logger.info("AI Voice Plugin loaded successfully")
+        self.ctx.logger.info("AI Voice Plugin loaded: mode=%s, default_voice=%s, voices=%s",
+            self.config.voice.voice_mode, self.default_voice, list(self.voices.keys()))
 
     async def on_unload(self) -> None:
         self.tts_service = None
@@ -66,8 +70,9 @@ class AIVoicePlugin(MaiBotPlugin):
             if self.tts_service and self.config.voice.mimo_api_key:
                 self.tts_service.update_api_key(self.config.voice.mimo_api_key)
                 self.tts_service.update_api_base_url(self.config.voice.api_base_url)
-            self.default_voice = self.config.voice.default_voice
+            self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
             await self._load_voices()
+            self.ctx.logger.info("Config reloaded: mode=%s, default_voice=%s", self.config.voice.voice_mode, self.default_voice)
         del config_data
 
     async def _load_voices(self) -> None:
@@ -162,32 +167,67 @@ class AIVoicePlugin(MaiBotPlugin):
         self.ctx.logger.error("All voice send methods failed")
         return False
 
+    def _resolve_voice(self, voice_name: str) -> tuple[str, str, str]:
+        """解析音色名称，返回 (voice_key, audio_base64, mode)。
+        mode: 'clone' 使用音色复刻, 'preset' 使用预置音色。
+        """
+        voice_mode = self.config.voice.voice_mode
+
+        # 确定要使用的音色 key
+        voice_key = voice_name if voice_name and voice_name != "default" else self.default_voice
+
+        # clone 模式：从本地音频文件中查找参考音频
+        if voice_mode == "clone":
+            if voice_key and voice_key in self.voices:
+                return voice_key, self.voices[voice_key], "clone"
+
+            # clone_voice 配置兜底
+            clone_fallback = self.config.voice.clone_voice
+            if clone_fallback and clone_fallback in self.voices:
+                self.ctx.logger.warning("Voice '%s' not found, using clone_voice config: '%s'", voice_key, clone_fallback)
+                return clone_fallback, self.voices[clone_fallback], "clone"
+
+            # 如果 voices 非空但指定的没有，报错而非静默切换
+            if self.voices:
+                available = list(self.voices.keys())
+                self.ctx.logger.error("Voice '%s' not found in voices! Available: %s. "
+                    "请在 config.toml 的 clone_voice 或 default_voice 中指定一个已有的音色名。", voice_key, available)
+                return "", "", ""
+
+            self.ctx.logger.error("No voices loaded! Please put .wav/.mp3 files in the voices/ directory.")
+            return "", "", ""
+
+        # preset 模式
+        preset_id = voice_key or self.config.voice.preset_voice or "mimo_default"
+        return preset_id, "", "preset"
+
     @API("voice_clone_tts", description="TTS with specified voice", version="1", public=True)
     async def voice_clone_tts(self, text: str, style_instruction: str = "", stream_id: str = "", voice_name: str = "") -> dict[str, Any]:
         if not self.tts_service:
             return {"success": False, "error": "TTS service not initialized"}
 
-        voice_key = voice_name if voice_name and voice_name != "default" else self.default_voice
-        if not voice_key:
-            self.ctx.logger.error("No voice configured! voices=%s, default_voice='%s'", list(self.voices.keys()), self.default_voice)
-            return {"success": False, "error": "No voice configured"}
+        if not text or not text.strip():
+            return {"success": False, "error": "Empty text"}
 
-        audio_base64 = self.voices.get(voice_key)
-        if not audio_base64:
-            # Fallback to first available voice
-            if self.voices:
-                voice_key = next(iter(self.voices))
-                audio_base64 = self.voices.get(voice_key)
-                self.ctx.logger.warning("Voice '%s' not found, falling back to '%s'", voice_name, voice_key)
-            if not audio_base64:
-                return {"success": False, "error": f"Voice not found: {voice_key}"}
+        voice_key, audio_base64, mode = self._resolve_voice(voice_name)
+        if not voice_key:
+            return {"success": False, "error": "No voice configured. Check voice config."}
+
+        self.ctx.logger.info("TTS request: mode=%s, voice_key=%s, text_len=%d", mode, voice_key, len(text))
 
         try:
-            result = await self.tts_service.synthesize_with_voice_clone(
-                text=text, reference_audio_base64=audio_base64, style_instruction=style_instruction,
-            )
+            if mode == "clone":
+                result = await self.tts_service.synthesize_with_voice_clone(
+                    text=text, reference_audio_base64=audio_base64, style_instruction=style_instruction,
+                )
+            else:
+                result = await self.tts_service.synthesize_with_preset(
+                    text=text, voice_id=voice_key, style_instruction=style_instruction,
+                )
+
             self.ctx.logger.info("TTS result: success=%s, audio_len=%d, error=%s",
                 result.get("success"), len(result.get("audio_base64", "")), result.get("error", ""))
+
             if result.get("success") and stream_id:
                 api_audio = result.get("audio_base64", "")
                 if "base64," in api_audio:

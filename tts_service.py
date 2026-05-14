@@ -47,6 +47,7 @@ class MiMoTTSService:
 
         payload = {
             "model": self.MODEL_PRESET,
+            "modalities": ["text", "audio"],
             "messages": messages,
             "audio": {
                 "format": audio_format,
@@ -87,6 +88,7 @@ class MiMoTTSService:
 
         payload = {
             "model": self.MODEL_CLONE,
+            "modalities": ["text", "audio"],
             "messages": messages,
             "audio": {
                 "format": audio_format,
