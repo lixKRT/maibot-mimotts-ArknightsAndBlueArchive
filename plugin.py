@@ -50,6 +50,7 @@ class AIVoicePlugin(MaiBotPlugin):
         self.default_voice: str = ""
 
     async def on_load(self) -> None:
+        self._ensure_config_exists()
         self.ctx.logger.info("AI Voice Plugin loading...")
         api_key = self.config.voice.mimo_api_key
         if not api_key:
@@ -59,6 +60,20 @@ class AIVoicePlugin(MaiBotPlugin):
         await self._load_voices()
         self.ctx.logger.info("AI Voice Plugin loaded: mode=%s, default_voice=%s, voices=%s",
             self.config.voice.voice_mode, self.default_voice, list(self.voices.keys()))
+
+    def _ensure_config_exists(self) -> None:
+        """如果用户目录下不存在 config.toml，则从 config.example.toml 复制生成。不会覆盖用户已有配置。"""
+        import shutil
+        plugin_dir = Path(__file__).parent
+        config_path = plugin_dir / "config.toml"
+        example_path = plugin_dir / "config.example.toml"
+        if config_path.exists():
+            return
+        if example_path.exists():
+            shutil.copy2(example_path, config_path)
+            self.ctx.logger.info("Generated config.toml from config.example.toml")
+        else:
+            self.ctx.logger.warning("Neither config.toml nor config.example.toml found")
 
     async def on_unload(self) -> None:
         if self.tts_service:
@@ -217,7 +232,8 @@ class AIVoicePlugin(MaiBotPlugin):
         if not voice_key:
             return {"success": False, "error": "No voice configured. Check voice config."}
 
-        self.ctx.logger.info("TTS request: mode=%s, voice_key=%s, text_len=%d", mode, voice_key, len(text))
+        self.ctx.logger.info("TTS request: mode=%s, voice_key=%s, text_len=%d, style_len=%d",
+            mode, voice_key, len(text), len(style_instruction))
 
         try:
             if mode == "clone":
@@ -259,19 +275,48 @@ class AIVoicePlugin(MaiBotPlugin):
 
     @Tool(
         "send_voice_reply",
-        brief_description="使用语音回复用户",
+        brief_description="使用语音回复用户，可选传入风格指令控制语气情绪",
         detailed_description=(
-            "使用语音进行回复。当用户要求语音、用户发送了语音消息、回复简短适合口语时使用。"
-            "只需提供回复文本和消息ID即可，系统会自动找到正确的聊天流并使用配置的默认音色。"
-            "你认为纯文本过长时需要用到语音回复以减小刷屏时可以调用此工具"
-            "参数: reply_text(必填,回复文本), msg_id(必填,当前消息的ID), "
-            "style_instruction(可选,风格指令如'用温柔语气说')"
+            "使用语音进行回复。当用户要求语音、用户发送了语音消息、或你认为当前场景适合语音回复时调用。\n"
+            "必填参数：reply_text（回复文本）、msg_id（当前消息ID）。\n"
+            "可选参数：style_instruction（语音风格指令），不传则使用默认音色自然朗读，需要更生动的表达时可填写。\n\n"
+            "【风格控制】可通过 style_instruction 参数精细控制语音演绎效果，"
+            "根据你当前扮演的角色人设和对话情境，主动提供完整的风格描述，让语音更拟人、更有感染力。\n\n"
+            "支持三种风格控制方式，可自由组合：\n\n"
+            "1. 自然语言风格指令（推荐）：用自然语言描述语气、情绪、语速等，像给演员说戏一样。\n"
+            "   示例：'一位温柔的少女，声音清甜软糯，语速偏慢，用安慰的语气，带点关切'\n"
+            "   示例：'语气俏皮活泼，带点小得意，语速偏快，声音明亮有活力'\n"
+            "   示例：'声音低沉严肃，像在教训人，语速慢一些，带点长辈的威严'\n\n"
+            "2. 导演模式（高级）：从角色、场景、指导三个维度全方位刻画表演，适合需要高度拟人化的场景。\n"
+            "   示例：'角色：一位温柔的大姐姐，性格体贴温暖，声音甜美有亲和力。"
+            "场景：安慰失恋的朋友。指导：语调柔和温暖，气息松弛，偶尔带叹息，语速偏慢，尾音上扬带笑意。'\n"
+            "   示例：'角色：百年门阀的大小姐，声音冷冽有威压，说话语速极慢，每个字都像在舌尖滚过。"
+            "场景：在祠堂面对企图带她私奔的男人。指导：实音重且硬，尾音处加入轻微气音透出疲惫。'\n\n"
+            "3. 音频标签（在 reply_text 中使用）：在文本任意位置用括号标注语气/情绪/声音动作。\n"
+            "   中文全角/半角均可：（紧张）呼……冷静。（叹气）算了。（轻笑）好吧好吧。\n"
+            "   英文：(sighs) I don't know. (laughs) That's funny!\n"
+            "   整段风格标签：在文本开头加（温柔）你好呀~ 或（东北话）哎呀妈呀~ 或（唱歌）歌词...\n"
+            "   常用风格标签：开心/悲伤/愤怒/温柔/慵懒/俏皮/磁性/沙哑/甜美/冷漠/严肃/活泼/深沉 等\n"
+            "   常用动作标签：叹气/轻笑/哽咽/深呼吸/咳嗽/打哈欠/低语/提高音量 等\n\n"
+            "提示：style_instruction（整体风格）+ reply_text 中的音频标签（句内细节）可同时使用，两者不冲突。"
         ),
         activation_type=ActivationType.ALWAYS,
         parameters=[
-            ToolParameterInfo(name="reply_text", param_type=ToolParamType.STRING, description="回复文本", required=True),
+            ToolParameterInfo(name="reply_text", param_type=ToolParamType.STRING, description="回复文本。可在文本中插入音频标签控制句内语气细节，如（叹气）（轻笑）（温柔）（紧张）等。", required=True),
             ToolParameterInfo(name="msg_id", param_type=ToolParamType.STRING, description="当前消息ID", required=True),
-            ToolParameterInfo(name="style_instruction", param_type=ToolParamType.STRING, description="语音风格指令", required=False, default=""),
+            ToolParameterInfo(
+                name="style_instruction",
+                param_type=ToolParamType.STRING,
+                description=(
+                    "（可选）语音风格指令，用自然语言描述语气、情绪、语速等，让语音更拟人。\n"
+                    "不传则默认朗读。当你觉得需要更生动的表达时再填写。\n"
+                    "简单用法：'温柔安慰的语气，语速稍慢'\n"
+                    "导演模式：'角色：XX，性格XX。场景：XX。指导：语调XX，语速XX，气息XX。'\n"
+                    "也可配合 reply_text 中的音频标签（叹气/轻笑/停顿等）使用。"
+                ),
+                required=False,
+                default="",
+            ),
         ],
     )
     async def send_voice_reply(self, reply_text: str, msg_id: str = "", style_instruction: str = "", **kwargs: Any) -> dict[str, Any]:
