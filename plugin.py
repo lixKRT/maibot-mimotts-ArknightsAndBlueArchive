@@ -110,10 +110,12 @@ class AIVoicePlugin(MaiBotPlugin):
             if self.tts_service and self.config.voice.mimo_api_key:
                 self.tts_service.update_api_key(self.config.voice.mimo_api_key)
                 self.tts_service.update_api_base_url(self.config.voice.api_base_url)
-            self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
 
             # 检查角色语音克隆配置
             await self._check_character_voices()
+
+            # 重新获取 default_voice（可能被 _check_character_voices 修改）
+            self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
 
             # 检查合成音频是否需要裁剪
             cvc = self.config.character_voice_clone
