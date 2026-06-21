@@ -186,15 +186,16 @@ class AIVoicePlugin(MaiBotPlugin):
                     lang = "cn"  # 默认中文
                 target_dir = voice_dir / lang
 
-                # 如果配置的语言目录不存在，使用第一个可用的语言目录
+                # 如果配置的语言目录不存在，查找可用的语言目录
                 if not target_dir.exists():
                     available_langs = [d.name for d in voice_dir.iterdir() if d.is_dir() and d.name in ["cn", "jp", "kr", "en"]]
                     if available_langs:
                         lang = available_langs[0]
                         target_dir = voice_dir / lang
-                        self.ctx.logger.warning("语言目录「%s」不存在，使用可用目录: %s", cvc.character_language, lang)
+                        self.ctx.logger.warning("语言目录「%s」不存在，已切换到: %s", cvc.character_language, lang)
                     else:
-                        self.ctx.logger.warning("没有可用的语言目录: %s", voice_dir)
+                        self.ctx.logger.error("角色「%s」没有可用的语言资源，尝试重新爬取...", cvc.enable_character)
+                        await self._retry_crawl(cvc.enable_character, voices_dir)
                         return
 
                 self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
@@ -202,12 +203,48 @@ class AIVoicePlugin(MaiBotPlugin):
                 self._update_config_file(voices_dir=f"voices/{cvc.enable_character}/voice/{lang}", default_voice="Synthetic_Audio")
                 self.ctx.logger.info("voices_dir 已修改为: %s, default_voice: Synthetic_Audio", self.config.voice.voices_dir)
             else:
-                self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
+                # 角色目录不存在或为空，尝试爬取
+                self.ctx.logger.warning("角色「%s」的音频目录不存在或为空，尝试爬取...", cvc.enable_character)
+                await self._retry_crawl(cvc.enable_character, voices_dir)
         else:
             # enable_character 为空时，恢复默认值
             self.config.voice.voices_dir = "voices"
             self.config.voice.default_voice = ""
             self._update_config_file(voices_dir="voices", default_voice="")
+
+    async def _retry_crawl(self, character_name: str, voices_dir: Path) -> None:
+        """尝试重新爬取角色资源。
+
+        Args:
+            character_name: 角色名称
+            voices_dir: voices 目录路径
+        """
+        cvc = self.config.character_voice_clone
+
+        # 判断是哪个游戏的角色
+        arknights_chars = [c.strip() for c in cvc.Arknights_character.replace("，", ",").split(",") if c.strip()]
+        ba_chars = [c.strip() for c in cvc.BlueArchive_character.replace("，", ",").split(",") if c.strip()]
+
+        if character_name in arknights_chars:
+            self.ctx.logger.info("重新爬取明日方舟角色「%s」...", character_name)
+            result = await self._crawl_arknights_voice(character_name, str(voices_dir))
+            if result.get("success"):
+                self.ctx.logger.info("角色「%s」重新爬取成功: %d 个语音", character_name, result.get("voice_count", 0))
+                # 爬取成功后重新检查
+                await self._check_character_voices()
+            else:
+                self.ctx.logger.error("角色「%s」重新爬取失败: %s", character_name, result.get("error", "未知错误"))
+        elif character_name in ba_chars:
+            self.ctx.logger.info("重新爬取蔚蓝档案角色「%s」...", character_name)
+            result = await self._crawl_blue_archive_voice(character_name, str(voices_dir))
+            if result.get("success"):
+                self.ctx.logger.info("角色「%s」重新爬取成功: %d 个语音", character_name, result.get("voice_count", 0))
+                # 爬取成功后重新检查
+                await self._check_character_voices()
+            else:
+                self.ctx.logger.error("角色「%s」重新爬取失败: %s", character_name, result.get("error", "未知错误"))
+        else:
+            self.ctx.logger.error("角色「%s」不在已配置的角色列表中", character_name)
 
     def _update_config_file(self, voices_dir: str = None, default_voice: str = None) -> None:
         """直接修改 config.toml 文件中的配置。
