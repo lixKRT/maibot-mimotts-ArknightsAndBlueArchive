@@ -38,10 +38,10 @@ class VoiceSectionConfig(PluginConfigBase):
 class CharacterVoiceCloneConfig(PluginConfigBase):
     __ui_label__ = "角色语音克隆"
     enable_character: str = Field(default="", description="启用的角色名称（修改 voices_dir 指向）")
-    character_language: str = Field(default="jp", description="启用的语言（cn/jp/kr/en），修改 voices_dir 到对应语言文件夹")
+    character_language: str = Field(default="cn", description="启用的语言（cn/jp/kr/en），与 enable_character 共同定位 voices_dir")
     Arknights_character: str = Field(default="桃金娘，铃兰", description="明日方舟角色列表（逗号分隔）")
     BlueArchive_character: str = Field(default="爱丽丝，柯伊", description="蔚蓝档案角色列表（逗号分隔）")
-    Max_Size_Synthesized_Audio: int = Field(default=8, description="合成音频最大文件大小（MB），范围 1-8")
+    Max_Size_Synthesized_Audio: float = Field(default=8.0, description="合成音频最大文件大小（MB），范围 1-8，支持小数")
 
 
 class VoicePluginConfig(PluginConfigBase):
@@ -106,13 +106,22 @@ class AIVoicePlugin(MaiBotPlugin):
             # 检查角色语音克隆配置
             await self._check_character_voices()
 
-            # 检查 Max_Size_Synthesized_Audio 是否变动
+            # 检查合成音频是否需要裁剪
             cvc = self.config.character_voice_clone
             if cvc.enable_character:
                 plugin_dir = Path(__file__).parent
-                char_dir = plugin_dir / self.config.voice.voices_dir
-                if char_dir.exists():
-                    await self._synthesize_audio(char_dir, cvc.Max_Size_Synthesized_Audio)
+                voices_dir = plugin_dir / "voices"
+                lang = cvc.character_language
+                if lang not in ["cn", "jp", "kr", "en"]:
+                    lang = "cn"
+
+                # 检查对应语言目录的合成音频
+                synth_path = voices_dir / cvc.enable_character / "voice" / lang / "Synthetic_Audio.mp3"
+                if synth_path.exists():
+                    max_size_bytes = int(cvc.Max_Size_Synthesized_Audio * 1024 * 1024)
+                    if synth_path.stat().st_size > max_size_bytes:
+                        self.ctx.logger.info("配置变更：裁剪合成音频至 %.1fMB", cvc.Max_Size_Synthesized_Audio)
+                        await self._trim_audio(synth_path, max_size_bytes)
 
             await self._load_voices()
             self.ctx.logger.info("Config reloaded: mode=%s, default_voice=%s", self.config.voice.voice_mode, self.default_voice)
@@ -160,25 +169,28 @@ class AIVoicePlugin(MaiBotPlugin):
                         if lang_dir.is_dir() and lang_dir.name in ["cn", "jp", "kr", "en"]:
                             await self._synthesize_audio(lang_dir, cvc.Max_Size_Synthesized_Audio)
 
-                # 根据 character_language 设置 voices_dir
+                # 根据 character_language 设置 voices_dir 和 default_voice
                 lang = cvc.character_language
                 if lang not in ["cn", "jp", "kr", "en"]:
-                    lang = "jp"  # 默认日语
+                    lang = "cn"  # 默认中文
                 target_dir = voice_dir / lang
                 if target_dir.exists():
                     self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
-                    self.ctx.logger.info("voices_dir 已修改为: %s", self.config.voice.voices_dir)
+                    self.config.voice.default_voice = "Synthetic_Audio"
+                    self.ctx.logger.info("voices_dir 已修改为: %s, default_voice: Synthetic_Audio", self.config.voice.voices_dir)
                 else:
                     self.ctx.logger.warning("语言目录不存在: %s", target_dir)
             else:
                 self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
 
-    async def _synthesize_audio(self, char_dir: Path, max_size_mb: int) -> None:
+    async def _synthesize_audio(self, char_dir: Path, max_size_mb: float) -> None:
         """将角色目录下的所有音频合成为一个 MP3 文件。
 
+        如果已存在合成音频且超出限制，则裁剪至符合要求。
+
         Args:
-            char_dir: 角色音频目录（如 voices/桃金娘）
-            max_size_mb: 最大文件大小（MB）
+            char_dir: 角色音频目录（如 voices/桃金娘/voice/jp）
+            max_size_mb: 最大文件大小（MB），支持小数
         """
         try:
             from pydub import AudioSegment
@@ -187,20 +199,36 @@ class AIVoicePlugin(MaiBotPlugin):
             return
 
         # 限制大小范围
-        max_size_mb = max(1, min(8, max_size_mb))
-        max_size_bytes = max_size_mb * 1024 * 1024
+        max_size_mb = max(1.0, min(8.0, max_size_mb))
+        max_size_bytes = int(max_size_mb * 1024 * 1024)
+
+        output_path = char_dir / "Synthetic_Audio.mp3"
+
+        # 检查已存在的合成音频是否符合要求
+        if output_path.exists():
+            existing_size = output_path.stat().st_size
+            if existing_size <= max_size_bytes:
+                self.ctx.logger.info("合成音频已存在且符合要求: %s (%.2fMB)", output_path, existing_size / 1024 / 1024)
+                return
+            else:
+                # 裁剪已存在的合成音频
+                self.ctx.logger.info("合成音频超出限制 (%.2fMB > %.2fMB)，裁剪中...", existing_size / 1024 / 1024, max_size_mb)
+                await self._trim_audio(output_path, max_size_bytes)
+                return
 
         # 收集所有音频文件（按文件名排序）
         audio_files = []
         for ext in ['*.wav', '*.mp3', '*.ogg']:
-            audio_files.extend(char_dir.rglob(ext))
+            audio_files.extend(char_dir.glob(ext))
+        # 排除已有的合成音频
+        audio_files = [f for f in audio_files if f.name != 'Synthetic_Audio.mp3']
         audio_files.sort(key=lambda f: f.name)
 
         if not audio_files:
             self.ctx.logger.warning("未找到音频文件: %s", char_dir)
             return
 
-        self.ctx.logger.info("开始合成音频: %d 个文件，最大限制 %dMB", len(audio_files), max_size_mb)
+        self.ctx.logger.info("开始合成音频: %d 个文件，最大限制 %.1fMB", len(audio_files), max_size_mb)
 
         # 合成音频（后面的优先，所以从后往前合并）
         combined = AudioSegment.empty()
@@ -211,14 +239,11 @@ class AIVoicePlugin(MaiBotPlugin):
             try:
                 segment = AudioSegment.from_file(audio_file)
                 # 估算合并后的字节大小
-                # pydub 的 len() 返回毫秒数，需要转换为字节
-                # 字节 = 毫秒 * 采样率 * 通道数 * 采样位数 / 8 / 1000
                 combined_bytes = len(combined) * combined.frame_rate * combined.channels * combined.sample_width / 1000 if len(combined) > 0 else 0
                 segment_bytes = len(segment) * segment.frame_rate * segment.channels * segment.sample_width / 1000
 
                 # 检查合并后是否超出限制
                 if combined_bytes + segment_bytes > max_size_bytes:
-                    # 如果已经有一些音频，停止添加
                     if len(combined) > 0:
                         break
 
@@ -232,11 +257,49 @@ class AIVoicePlugin(MaiBotPlugin):
             return
 
         # 导出为 MP3
-        output_path = char_dir / "Synthetic_Audio.mp3"
         combined.export(output_path, format='mp3', bitrate='128k')
 
         file_size = output_path.stat().st_size
         self.ctx.logger.info("合成完成: %s (%.2fMB，使用 %d 个文件)", output_path, file_size / 1024 / 1024, len(used_files))
+
+    async def _trim_audio(self, audio_path: Path, max_size_bytes: int) -> None:
+        """裁剪音频文件至指定大小。
+
+        从后往前保留音频内容（后面的优先），截断前面的部分。
+
+        Args:
+            audio_path: 音频文件路径
+            max_size_bytes: 最大字节数
+        """
+        try:
+            from pydub import AudioSegment
+        except ImportError:
+            self.ctx.logger.error("pydub 未安装，无法裁剪音频")
+            return
+
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            original_size = audio_path.stat().st_size
+
+            # 计算目标时长（毫秒）
+            # 字节 = 毫秒 * 比特率 / 8 / 1000
+            # 比特率 128kbps = 128000 bps
+            target_ms = int(max_size_bytes * 8 * 1000 / 128000)
+
+            if len(audio) <= target_ms:
+                self.ctx.logger.info("音频时长未超限，无需裁剪")
+                return
+
+            # 从后往前截取（保留后面的音频）
+            trimmed = audio[-target_ms:]
+
+            # 导出裁剪后的音频
+            trimmed.export(audio_path, format='mp3', bitrate='128k')
+
+            new_size = audio_path.stat().st_size
+            self.ctx.logger.info("裁剪完成: %.2fMB -> %.2fMB", original_size / 1024 / 1024, new_size / 1024 / 1024)
+        except Exception as e:
+            self.ctx.logger.error("裁剪音频失败: %s - %s", audio_path, e)
         """检查角色语音克隆配置，必要时启动爬虫。"""
         cvc = self.config.character_voice_clone
         plugin_dir = Path(__file__).parent

@@ -15,6 +15,7 @@ class CrawlerSettings:
     download_delay: float = 0.5
     max_concurrent: int = 4
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    max_synthesized_audio_mb: float = 8.0  # 合成音频最大文件大小（MB）
 
     # PRTS Wiki 相关 URL
     wiki_base_url: str = "https://prts.wiki"
