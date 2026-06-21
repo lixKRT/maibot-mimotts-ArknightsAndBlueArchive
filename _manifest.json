@@ -21,7 +21,10 @@
     "min_version": "1.0.0",
     "max_version": "2.99.99"
   },
-  "dependencies": [],
+  "dependencies": [
+    {"type": "python_package", "name": "aiohttp", "version_spec": ">=3.8.0"},
+    {"type": "python_package", "name": "selectolax", "version_spec": ">=0.3.0"}
+  ],
   "capabilities": [
     "send.text",
     "send.custom",

@@ -1,0 +1,20 @@
+{
+  "operators": {
+    "myrtle": {
+      "name_cn": "桃金娘",
+      "alias_cn": []
+    },
+    "suzuran": {
+      "name_cn": "铃兰",
+      "alias_cn": []
+    },
+    "amiya": {
+      "name_cn": "阿米娅",
+      "alias_cn": ["兔兔"]
+    },
+    "silverash": {
+      "name_cn": "银灰",
+      "alias_cn": []
+    }
+  }
+}
