@@ -230,8 +230,6 @@ class AIVoicePlugin(MaiBotPlugin):
             result = await self._crawl_arknights_voice(character_name, str(voices_dir))
             if result.get("success"):
                 self.ctx.logger.info("角色「%s」重新爬取成功: %d 个语音", character_name, result.get("voice_count", 0))
-                # 爬取成功后重新检查
-                await self._check_character_voices()
             else:
                 self.ctx.logger.error("角色「%s」重新爬取失败: %s", character_name, result.get("error", "未知错误"))
         elif character_name in ba_chars:
@@ -239,8 +237,6 @@ class AIVoicePlugin(MaiBotPlugin):
             result = await self._crawl_blue_archive_voice(character_name, str(voices_dir))
             if result.get("success"):
                 self.ctx.logger.info("角色「%s」重新爬取成功: %d 个语音", character_name, result.get("voice_count", 0))
-                # 爬取成功后重新检查
-                await self._check_character_voices()
             else:
                 self.ctx.logger.error("角色「%s」重新爬取失败: %s", character_name, result.get("error", "未知错误"))
         else:
