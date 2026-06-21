@@ -1,10 +1,11 @@
-"""语音爬虫 -- 从 PRTS Wiki 获取干员语音数据并下载音频文件。"""
+"""语音爬虫 -- 从 PRTS Wiki 获取干员语音数据并下载音频文件，并生成台词台本。"""
 
 import asyncio
 import logging
 import re
 from pathlib import Path
 from typing import Optional
+from dataclasses import dataclass
 
 import aiohttp
 from selectolax.parser import HTMLParser
@@ -14,6 +15,15 @@ from crawlers.arknights_crawler.pipelines import VoicePipeline
 from crawlers.arknights_crawler.settings import CrawlerSettings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VoiceScript:
+    """语音台词数据。"""
+    filename: str = ""      # 文件名
+    title_cn: str = ""      # 中文标题
+    text_cn: str = ""       # 中文台词
+    text_jp: str = ""       # 日语台词
 
 # 语言代码到中文名称的映射
 LANGUAGE_MAP = {
@@ -86,14 +96,15 @@ class VoiceSpider:
         operator_id: str,
         languages: list[str],
         output_dir: str,
-    ) -> list[VoiceItem]:
+    ) -> tuple[list[VoiceItem], list[VoiceScript]]:
         parser = HTMLParser(html)
         items: list[VoiceItem] = []
+        scripts: list[VoiceScript] = []
 
         voice_nodes = parser.css("div.voice-data-item")
         if not voice_nodes:
             logger.warning("未找到语音数据项: %s", operator_name)
-            return items
+            return items, scripts
 
         for node in voice_nodes:
             title = (node.attributes.get("data-title") or "").strip()
@@ -109,6 +120,28 @@ class VoiceSpider:
                 logger.debug("无法从文件名提取编号: %s", filename)
                 continue
             number = number_match.group(1)
+
+            # 提取台词文本
+            text_cn = ""
+            text_jp = ""
+            detail_nodes = node.css("div.voice-item-detail")
+            for detail in detail_nodes:
+                kind = (detail.attributes.get("data-kind-name") or "").strip()
+                text = detail.text(deep=True, strip=True)
+                if kind == "中文":
+                    text_cn = text
+                elif kind == "日文":
+                    text_jp = text
+
+            # 生成文件名（去掉扩展名）
+            script_filename = f"cn_{number}"
+
+            scripts.append(VoiceScript(
+                filename=script_filename,
+                title_cn=title,
+                text_cn=text_cn,
+                text_jp=text_jp,
+            ))
 
             for lang in languages:
                 lang_code = lang.lower()
@@ -137,7 +170,29 @@ class VoiceSpider:
                 )
 
         logger.info("解析到 %d 条语音（%d 种语言）: %s", len(voice_nodes), len(languages), operator_name)
-        return items
+        return items, scripts
+
+    def _generate_script_md(self, scripts: list[VoiceScript], operator_name: str, save_path: Path) -> None:
+        """生成台词台本 markdown 文件。"""
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        lines = []
+        lines.append(f"# {operator_name} 语音台本\n")
+
+        for script in scripts:
+            lines.append(f"# {script.filename} - {script.title_cn}\n")
+            if script.text_cn:
+                lines.append(f"**中文**: {script.text_cn}\n")
+            if script.text_jp:
+                lines.append(f"**日语**: {script.text_jp}\n")
+            lines.append("")
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            logger.info("已生成台词台本: %s", save_path)
+        except OSError as exc:
+            logger.error("台词台本写入失败: %s - %s", save_path, exc)
 
     async def run(
         self,
@@ -171,11 +226,16 @@ class VoiceSpider:
                 result["error"] = "无法获取语音页面"
                 return result
 
-            voice_items = self.parse_voice_items(html, operator_name, operator_id, languages, output_dir)
+            voice_items, scripts = self.parse_voice_items(html, operator_name, operator_id, languages, output_dir)
 
             if not voice_items:
                 result["error"] = "未解析到语音数据"
                 return result
+
+            # 生成台词台本
+            if scripts:
+                script_path = Path(output_dir) / operator_name / "script.md"
+                self._generate_script_md(scripts, operator_name, script_path)
 
             session = await self._ensure_session()
             tasks = [self._pipeline.process(item, session, self._semaphore) for item in voice_items]
