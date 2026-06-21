@@ -487,7 +487,7 @@ class AIVoicePlugin(MaiBotPlugin):
 
             student_id = settings.find_student_id(character_name)
             if not student_id:
-                return {"success": False, "error": "search fail"}
+                return {"success": False, "error": f"未找到学生「{character_name}」的ID，请在 mapping.json 中添加映射（访问 https://www.gamekee.com/ba 查找学生ID）"}
 
             spider = VoiceSpider(settings)
             result = await spider.crawl(
