@@ -64,6 +64,7 @@ class AIVoicePlugin(MaiBotPlugin):
         self.tts_service: Optional[MiMoTTSService] = None
         self.voices: dict[str, str] = {}
         self.default_voice: str = ""
+        self._updating_config: bool = False  # 防止配置更新循环
 
     async def on_load(self) -> None:
         self._ensure_config_exists()
@@ -106,6 +107,10 @@ class AIVoicePlugin(MaiBotPlugin):
 
     async def on_config_update(self, scope: str, config_data: dict[str, object], version: str) -> None:
         if scope == CONFIG_RELOAD_SCOPE_SELF:
+            # 防止配置更新循环
+            if self._updating_config:
+                self.ctx.logger.debug("跳过配置更新（正在修改中）")
+                return
             self.ctx.logger.info("Plugin config updated: version=%s", version)
             if self.tts_service and self.config.voice.mimo_api_key:
                 self.tts_service.update_api_key(self.config.voice.mimo_api_key)
@@ -258,6 +263,9 @@ class AIVoicePlugin(MaiBotPlugin):
         if not config_path.exists():
             return
 
+        # 设置标志防止循环
+        self._updating_config = True
+
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = toml.load(f)
@@ -277,6 +285,13 @@ class AIVoicePlugin(MaiBotPlugin):
             self.ctx.logger.info("config.toml 已更新: voices_dir=%s, default_voice=%s", voices_dir, default_voice)
         except Exception as e:
             self.ctx.logger.error("更新 config.toml 失败: %s", e)
+        finally:
+            # 延迟重置标志，给文件监控时间处理
+            asyncio.get_event_loop().call_later(1.0, self._reset_config_flag)
+
+    def _reset_config_flag(self) -> None:
+        """重置配置更新标志。"""
+        self._updating_config = False
 
     async def _synthesize_audio(self, char_dir: Path, max_size_mb: float) -> None:
         """将角色目录下的所有音频合成为一个 MP3 文件。
