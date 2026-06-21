@@ -47,7 +47,7 @@ class CharacterVoiceCloneConfig(PluginConfigBase):
     character_language: str = Field(default="cn", description="启用的语言（cn/jp/kr/en），与 enable_character 共同定位 voices_dir")
     Arknights_character: str = Field(default="桃金娘，铃兰", description="明日方舟角色列表（逗号分隔）")
     BlueArchive_character: str = Field(default="爱丽丝，柯伊", description="蔚蓝档案角色列表（逗号分隔）")
-    Max_Size_Synthesized_Audio: float = Field(default=8.0, description="合成音频最大文件大小（MB），范围 1-8，支持小数")
+    Max_Size_Synthesized_Audio: float = Field(default=2.0, description="合成音频最大文件大小（MB），范围 1-8，支持小数")
 
 
 class VoicePluginConfig(PluginConfigBase):
@@ -175,7 +175,7 @@ class AIVoicePlugin(MaiBotPlugin):
                         if lang_dir.is_dir() and lang_dir.name in ["cn", "jp", "kr", "en"]:
                             await self._synthesize_audio(lang_dir, cvc.Max_Size_Synthesized_Audio)
 
-                # 根据 character_language 设置 voices_dir 和 default_voice
+                # 根据 character_language 设置 voices_dir
                 lang = cvc.character_language
                 if lang not in ["cn", "jp", "kr", "en"]:
                     lang = "cn"  # 默认中文
@@ -213,9 +213,11 @@ class AIVoicePlugin(MaiBotPlugin):
             self.ctx.logger.error("pydub 未安装，无法合成音频。请执行: pip install pydub")
             return
 
-        # 限制大小范围
+        # 限制大小范围 1-8MB
         max_size_mb = max(1.0, min(8.0, max_size_mb))
         max_size_bytes = int(max_size_mb * 1024 * 1024)
+        # MP3 128kbps: 字节 = 毫秒 * 128000 / 8 / 1000 = 毫秒 * 16
+        max_duration_ms = int(max_size_bytes / 16)
 
         output_path = char_dir / "Synthetic_Audio.mp3"
 
@@ -253,12 +255,8 @@ class AIVoicePlugin(MaiBotPlugin):
         for audio_file in reversed(audio_files):
             try:
                 segment = AudioSegment.from_file(audio_file)
-                # 估算合并后的字节大小
-                combined_bytes = len(combined) * combined.frame_rate * combined.channels * combined.sample_width / 1000 if len(combined) > 0 else 0
-                segment_bytes = len(segment) * segment.frame_rate * segment.channels * segment.sample_width / 1000
-
-                # 检查合并后是否超出限制
-                if combined_bytes + segment_bytes > max_size_bytes:
+                # 检查合并后时长是否超出限制（MP3 128kbps）
+                if len(combined) + len(segment) > max_duration_ms:
                     if len(combined) > 0:
                         break
 
