@@ -2,8 +2,14 @@
 
 import asyncio
 import base64
+import sys
 from pathlib import Path
 from typing import Any, Optional
+
+# 将插件目录添加到 sys.path，确保 crawlers 模块可以被导入
+_plugin_dir = str(Path(__file__).parent)
+if _plugin_dir not in sys.path:
+    sys.path.insert(0, _plugin_dir)
 
 from maibot_sdk import API, CONFIG_RELOAD_SCOPE_SELF, MaiBotPlugin, Tool, Field, PluginConfigBase
 from maibot_sdk.types import ActivationType, ToolParameterInfo, ToolParamType
