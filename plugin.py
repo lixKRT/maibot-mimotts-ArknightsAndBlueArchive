@@ -38,6 +38,7 @@ class VoiceSectionConfig(PluginConfigBase):
 class CharacterVoiceCloneConfig(PluginConfigBase):
     __ui_label__ = "角色语音克隆"
     enable_character: str = Field(default="", description="启用的角色名称（修改 voices_dir 指向）")
+    character_language: str = Field(default="jp", description="启用的语言（cn/jp/kr/en），修改 voices_dir 到对应语言文件夹")
     Arknights_character: str = Field(default="桃金娘，铃兰", description="明日方舟角色列表（逗号分隔）")
     BlueArchive_character: str = Field(default="爱丽丝，柯伊", description="蔚蓝档案角色列表（逗号分隔）")
     Max_Size_Synthesized_Audio: int = Field(default=8, description="合成音频最大文件大小（MB），范围 1-8")
@@ -148,14 +149,27 @@ class AIVoicePlugin(MaiBotPlugin):
                 else:
                     self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
 
-        # 如果 enable_character 不为空，修改 voices_dir 并合成音频
+        # 如果 enable_character 不为空，为每个语言文件夹合成音频
         if cvc.enable_character:
             enable_dir = voices_dir / cvc.enable_character
             if enable_dir.exists() and self._has_audio_files(enable_dir):
-                self.config.voice.voices_dir = f"voices/{cvc.enable_character}"
-                self.ctx.logger.info("voices_dir 已修改为: %s", self.config.voice.voices_dir)
-                # 合成音频
-                await self._synthesize_audio(enable_dir, cvc.Max_Size_Synthesized_Audio)
+                # 为每个语言文件夹生成合成音频
+                voice_dir = enable_dir / "voice"
+                if voice_dir.exists():
+                    for lang_dir in voice_dir.iterdir():
+                        if lang_dir.is_dir() and lang_dir.name in ["cn", "jp", "kr", "en"]:
+                            await self._synthesize_audio(lang_dir, cvc.Max_Size_Synthesized_Audio)
+
+                # 根据 character_language 设置 voices_dir
+                lang = cvc.character_language
+                if lang not in ["cn", "jp", "kr", "en"]:
+                    lang = "jp"  # 默认日语
+                target_dir = voice_dir / lang
+                if target_dir.exists():
+                    self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
+                    self.ctx.logger.info("voices_dir 已修改为: %s", self.config.voice.voices_dir)
+                else:
+                    self.ctx.logger.warning("语言目录不存在: %s", target_dir)
             else:
                 self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
 
@@ -196,13 +210,17 @@ class AIVoicePlugin(MaiBotPlugin):
         for audio_file in reversed(audio_files):
             try:
                 segment = AudioSegment.from_file(audio_file)
+                # 估算合并后的字节大小
+                # pydub 的 len() 返回毫秒数，需要转换为字节
+                # 字节 = 毫秒 * 采样率 * 通道数 * 采样位数 / 8 / 1000
+                combined_bytes = len(combined) * combined.frame_rate * combined.channels * combined.sample_width / 1000 if len(combined) > 0 else 0
+                segment_bytes = len(segment) * segment.frame_rate * segment.channels * segment.sample_width / 1000
+
                 # 检查合并后是否超出限制
-                if len(combined) + len(segment) > max_size_bytes * 1000:  # pydub 使用毫秒
+                if combined_bytes + segment_bytes > max_size_bytes:
                     # 如果已经有一些音频，停止添加
                     if len(combined) > 0:
                         break
-                    # 如果单个文件就超限，截断它
-                    segment = segment[:max_size_bytes * 1000 // 32000]  # 假设 32kbps
 
                 combined = segment + combined  # 插入到前面（保持后面的优先）
                 used_files.append(audio_file.name)
