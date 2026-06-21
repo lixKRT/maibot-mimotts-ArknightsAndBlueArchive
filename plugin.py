@@ -40,6 +40,7 @@ class CharacterVoiceCloneConfig(PluginConfigBase):
     enable_character: str = Field(default="", description="启用的角色名称（修改 voices_dir 指向）")
     Arknights_character: str = Field(default="桃金娘，铃兰", description="明日方舟角色列表（逗号分隔）")
     BlueArchive_character: str = Field(default="爱丽丝，柯伊", description="蔚蓝档案角色列表（逗号分隔）")
+    Max_Size_Synthesized_Audio: int = Field(default=8, description="合成音频最大文件大小（MB），范围 1-8")
 
 
 class VoicePluginConfig(PluginConfigBase):
@@ -104,10 +105,120 @@ class AIVoicePlugin(MaiBotPlugin):
             # 检查角色语音克隆配置
             await self._check_character_voices()
 
+            # 检查 Max_Size_Synthesized_Audio 是否变动
+            cvc = self.config.character_voice_clone
+            if cvc.enable_character:
+                plugin_dir = Path(__file__).parent
+                char_dir = plugin_dir / self.config.voice.voices_dir
+                if char_dir.exists():
+                    await self._synthesize_audio(char_dir, cvc.Max_Size_Synthesized_Audio)
+
             await self._load_voices()
             self.ctx.logger.info("Config reloaded: mode=%s, default_voice=%s", self.config.voice.voice_mode, self.default_voice)
 
     async def _check_character_voices(self) -> None:
+        """检查角色语音克隆配置，必要时启动爬虫。"""
+        cvc = self.config.character_voice_clone
+        plugin_dir = Path(__file__).parent
+        voices_dir = plugin_dir / self.config.voice.voices_dir
+
+        # 解析角色列表
+        arknights_chars = [c.strip() for c in cvc.Arknights_character.replace("，", ",").split(",") if c.strip()]
+        ba_chars = [c.strip() for c in cvc.BlueArchive_character.replace("，", ",").split(",") if c.strip()]
+
+        # 检查并爬取明日方舟角色
+        for char_name in arknights_chars:
+            char_dir = voices_dir / char_name
+            if not self._has_audio_files(char_dir):
+                self.ctx.logger.info("角色「%s」无音频资源，启动明日方舟爬虫...", char_name)
+                result = await self._crawl_arknights_voice(char_name, str(voices_dir))
+                if result.get("success"):
+                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
+                else:
+                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
+
+        # 检查并爬取蔚蓝档案角色
+        for char_name in ba_chars:
+            char_dir = voices_dir / char_name
+            if not self._has_audio_files(char_dir):
+                self.ctx.logger.info("角色「%s」无音频资源，启动蔚蓝档案爬虫...", char_name)
+                result = await self._crawl_blue_archive_voice(char_name, str(voices_dir))
+                if result.get("success"):
+                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
+                else:
+                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
+
+        # 如果 enable_character 不为空，修改 voices_dir 并合成音频
+        if cvc.enable_character:
+            enable_dir = voices_dir / cvc.enable_character
+            if enable_dir.exists() and self._has_audio_files(enable_dir):
+                self.config.voice.voices_dir = f"voices/{cvc.enable_character}"
+                self.ctx.logger.info("voices_dir 已修改为: %s", self.config.voice.voices_dir)
+                # 合成音频
+                await self._synthesize_audio(enable_dir, cvc.Max_Size_Synthesized_Audio)
+            else:
+                self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
+
+    async def _synthesize_audio(self, char_dir: Path, max_size_mb: int) -> None:
+        """将角色目录下的所有音频合成为一个 MP3 文件。
+
+        Args:
+            char_dir: 角色音频目录（如 voices/桃金娘）
+            max_size_mb: 最大文件大小（MB）
+        """
+        try:
+            from pydub import AudioSegment
+        except ImportError:
+            self.ctx.logger.error("pydub 未安装，无法合成音频。请执行: pip install pydub")
+            return
+
+        # 限制大小范围
+        max_size_mb = max(1, min(8, max_size_mb))
+        max_size_bytes = max_size_mb * 1024 * 1024
+
+        # 收集所有音频文件（按文件名排序）
+        audio_files = []
+        for ext in ['*.wav', '*.mp3', '*.ogg']:
+            audio_files.extend(char_dir.rglob(ext))
+        audio_files.sort(key=lambda f: f.name)
+
+        if not audio_files:
+            self.ctx.logger.warning("未找到音频文件: %s", char_dir)
+            return
+
+        self.ctx.logger.info("开始合成音频: %d 个文件，最大限制 %dMB", len(audio_files), max_size_mb)
+
+        # 合成音频（后面的优先，所以从后往前合并）
+        combined = AudioSegment.empty()
+        used_files = []
+
+        # 从后往前遍历（后面的音频更优先）
+        for audio_file in reversed(audio_files):
+            try:
+                segment = AudioSegment.from_file(audio_file)
+                # 检查合并后是否超出限制
+                if len(combined) + len(segment) > max_size_bytes * 1000:  # pydub 使用毫秒
+                    # 如果已经有一些音频，停止添加
+                    if len(combined) > 0:
+                        break
+                    # 如果单个文件就超限，截断它
+                    segment = segment[:max_size_bytes * 1000 // 32000]  # 假设 32kbps
+
+                combined = segment + combined  # 插入到前面（保持后面的优先）
+                used_files.append(audio_file.name)
+            except Exception as e:
+                self.ctx.logger.warning("加载音频失败: %s - %s", audio_file.name, e)
+
+        if len(combined) == 0:
+            self.ctx.logger.error("合成失败：无有效音频")
+            return
+
+        # 导出为 MP3
+        output_path = char_dir / "Synthetic_Audio.mp3"
+        combined.export(output_path, format='mp3', bitrate='128k')
+
+        file_size = output_path.stat().st_size
+        self.ctx.logger.info("合成完成: %s (%.2fMB，使用 %d 个文件)", output_path, file_size / 1024 / 1024, len(used_files))
         """检查角色语音克隆配置，必要时启动爬虫。"""
         cvc = self.config.character_voice_clone
         plugin_dir = Path(__file__).parent
