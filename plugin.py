@@ -216,8 +216,11 @@ class AIVoicePlugin(MaiBotPlugin):
         # 限制大小范围 1-8MB
         max_size_mb = max(1.0, min(8.0, max_size_mb))
         max_size_bytes = int(max_size_mb * 1024 * 1024)
+        # 允许实际大小与目标的差值在 1MB 以内
+        min_size_bytes = int(max(0, max_size_mb - 1.0) * 1024 * 1024)
         # MP3 128kbps: 字节 = 毫秒 * 128000 / 8 / 1000 = 毫秒 * 16
         max_duration_ms = int(max_size_bytes / 16)
+        min_duration_ms = int(min_size_bytes / 16)
 
         output_path = char_dir / "Synthetic_Audio.mp3"
 
@@ -255,10 +258,13 @@ class AIVoicePlugin(MaiBotPlugin):
         for audio_file in reversed(audio_files):
             try:
                 segment = AudioSegment.from_file(audio_file)
-                # 检查合并后时长是否超出限制（MP3 128kbps）
+                # 检查合并后时长是否超出上限
                 if len(combined) + len(segment) > max_duration_ms:
-                    if len(combined) > 0:
+                    # 如果当前时长已在允许范围内（距上限差值 <= 1MB），停止添加
+                    if len(combined) >= min_duration_ms:
                         break
+                    # 如果当前时长不足最小值，继续添加（允许略微超过上限）
+                    # 但不能超过太多（最多再加一个片段）
 
                 combined = segment + combined  # 插入到前面（保持后面的优先）
                 used_files.append(audio_file.name)

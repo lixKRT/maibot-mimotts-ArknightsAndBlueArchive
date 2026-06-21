@@ -15,7 +15,6 @@ class CrawlerSettings:
     max_concurrent: int = 4
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     mapping_file: str = "mapping.json"
-    max_synthesized_audio_mb: float = 2.0  # 合成音频最大文件大小（MB）
 
     # 缓存的学生映射数据
     _student_mapping: dict[str, str] = field(default_factory=dict, repr=False)
