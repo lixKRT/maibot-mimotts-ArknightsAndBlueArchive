@@ -180,12 +180,21 @@ class AIVoicePlugin(MaiBotPlugin):
                 if lang not in ["cn", "jp", "kr", "en"]:
                     lang = "cn"  # 默认中文
                 target_dir = voice_dir / lang
-                if target_dir.exists():
-                    self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
-                    self.config.voice.default_voice = "Synthetic_Audio"
-                    self.ctx.logger.info("voices_dir 已修改为: %s, default_voice: Synthetic_Audio", self.config.voice.voices_dir)
-                else:
-                    self.ctx.logger.warning("语言目录不存在: %s", target_dir)
+
+                # 如果配置的语言目录不存在，使用第一个可用的语言目录
+                if not target_dir.exists():
+                    available_langs = [d.name for d in voice_dir.iterdir() if d.is_dir() and d.name in ["cn", "jp", "kr", "en"]]
+                    if available_langs:
+                        lang = available_langs[0]
+                        target_dir = voice_dir / lang
+                        self.ctx.logger.warning("语言目录「%s」不存在，使用可用目录: %s", cvc.character_language, lang)
+                    else:
+                        self.ctx.logger.warning("没有可用的语言目录: %s", voice_dir)
+                        return
+
+                self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
+                self.config.voice.default_voice = "Synthetic_Audio"
+                self.ctx.logger.info("voices_dir 已修改为: %s, default_voice: Synthetic_Audio", self.config.voice.voices_dir)
             else:
                 self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
 
@@ -347,10 +356,10 @@ class AIVoicePlugin(MaiBotPlugin):
                 self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
 
     def _has_audio_files(self, directory: Path) -> bool:
-        """检查目录是否有音频文件。"""
+        """检查目录是否有音频文件（递归检查子目录）。"""
         if not directory.exists():
             return False
-        audio_files = list(directory.glob("*.wav")) + list(directory.glob("*.mp3")) + list(directory.glob("*.ogg"))
+        audio_files = list(directory.rglob("*.wav")) + list(directory.rglob("*.mp3")) + list(directory.rglob("*.ogg"))
         return len(audio_files) > 0
 
     async def _crawl_arknights_voice(self, character_name: str, output_dir: str) -> dict:
