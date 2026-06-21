@@ -41,7 +41,28 @@ class CrawlerSettings:
         return self._student_mapping
 
     def find_student_id(self, student_name: str) -> str | None:
-        """根据名称查找学生 ID。"""
+        """根据名称查找学生 ID。
+
+        支持全角/半角括号自动转换。
+        """
         if not student_name:
             return None
-        return self._student_mapping.get(student_name)
+
+        # 直接查找
+        result = self._student_mapping.get(student_name)
+        if result:
+            return result
+
+        # 尝试全角括号转半角
+        normalized = student_name.replace("（", "(").replace("）", ")")
+        result = self._student_mapping.get(normalized)
+        if result:
+            return result
+
+        # 尝试半角括号转全角
+        normalized = student_name.replace("(", "（").replace(")", "）")
+        result = self._student_mapping.get(normalized)
+        if result:
+            return result
+
+        return None
