@@ -141,7 +141,8 @@ class AIVoicePlugin(MaiBotPlugin):
         """检查角色语音克隆配置，必要时启动爬虫。"""
         cvc = self.config.character_voice_clone
         plugin_dir = Path(__file__).parent
-        voices_dir = plugin_dir / self.config.voice.voices_dir
+        # 始终使用基础 voices 目录，而不是当前的 voices_dir（可能已被修改）
+        voices_dir = plugin_dir / "voices"
 
         # 解析角色列表
         arknights_chars = [c.strip() for c in cvc.Arknights_character.replace("，", ",").split(",") if c.strip()]
