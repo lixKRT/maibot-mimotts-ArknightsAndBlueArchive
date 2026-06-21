@@ -77,6 +77,9 @@ class AIVoicePlugin(MaiBotPlugin):
         # 检查角色语音克隆配置
         await self._check_character_voices()
 
+        # 重新获取 default_voice（可能被 _check_character_voices 修改）
+        self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
+
         await self._load_voices()
         self.ctx.logger.info("AI Voice Plugin loaded: mode=%s, default_voice=%s, voices=%s",
             self.config.voice.voice_mode, self.default_voice, list(self.voices.keys()))
