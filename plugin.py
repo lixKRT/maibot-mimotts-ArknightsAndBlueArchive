@@ -35,9 +35,17 @@ class VoiceSectionConfig(PluginConfigBase):
     clone_voice: str = Field(default="", description="复刻音色文件名（clone模式下优先使用）")
 
 
+class CharacterVoiceCloneConfig(PluginConfigBase):
+    __ui_label__ = "角色语音克隆"
+    enable_character: str = Field(default="", description="启用的角色名称（修改 voices_dir 指向）")
+    Arknights_character: str = Field(default="桃金娘，铃兰", description="明日方舟角色列表（逗号分隔）")
+    BlueArchive_character: str = Field(default="爱丽丝，柯伊", description="蔚蓝档案角色列表（逗号分隔）")
+
+
 class VoicePluginConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     voice: VoiceSectionConfig = Field(default_factory=VoiceSectionConfig)
+    character_voice_clone: CharacterVoiceCloneConfig = Field(default_factory=CharacterVoiceCloneConfig)
 
 
 class AIVoicePlugin(MaiBotPlugin):
@@ -57,6 +65,10 @@ class AIVoicePlugin(MaiBotPlugin):
             self.ctx.logger.warning("MiMo API Key not configured")
         self.tts_service = MiMoTTSService(api_key=api_key, api_base_url=self.config.voice.api_base_url, logger=self.ctx.logger)
         self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
+
+        # 检查角色语音克隆配置
+        await self._check_character_voices()
+
         await self._load_voices()
         self.ctx.logger.info("AI Voice Plugin loaded: mode=%s, default_voice=%s, voices=%s",
             self.config.voice.voice_mode, self.default_voice, list(self.voices.keys()))
@@ -88,8 +100,104 @@ class AIVoicePlugin(MaiBotPlugin):
                 self.tts_service.update_api_key(self.config.voice.mimo_api_key)
                 self.tts_service.update_api_base_url(self.config.voice.api_base_url)
             self.default_voice = self.config.voice.default_voice or self.config.voice.clone_voice
+
+            # 检查角色语音克隆配置
+            await self._check_character_voices()
+
             await self._load_voices()
             self.ctx.logger.info("Config reloaded: mode=%s, default_voice=%s", self.config.voice.voice_mode, self.default_voice)
+
+    async def _check_character_voices(self) -> None:
+        """检查角色语音克隆配置，必要时启动爬虫。"""
+        cvc = self.config.character_voice_clone
+        plugin_dir = Path(__file__).parent
+        voices_dir = plugin_dir / self.config.voice.voices_dir
+
+        # 解析角色列表
+        arknights_chars = [c.strip() for c in cvc.Arknights_character.replace("，", ",").split(",") if c.strip()]
+        ba_chars = [c.strip() for c in cvc.BlueArchive_character.replace("，", ",").split(",") if c.strip()]
+
+        # 检查并爬取明日方舟角色
+        for char_name in arknights_chars:
+            char_dir = voices_dir / char_name
+            if not self._has_audio_files(char_dir):
+                self.ctx.logger.info("角色「%s」无音频资源，启动明日方舟爬虫...", char_name)
+                result = await self._crawl_arknights_voice(char_name, str(voices_dir))
+                if result.get("success"):
+                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
+                else:
+                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
+
+        # 检查并爬取蔚蓝档案角色
+        for char_name in ba_chars:
+            char_dir = voices_dir / char_name
+            if not self._has_audio_files(char_dir):
+                self.ctx.logger.info("角色「%s」无音频资源，启动蔚蓝档案爬虫...", char_name)
+                result = await self._crawl_blue_archive_voice(char_name, str(voices_dir))
+                if result.get("success"):
+                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
+                else:
+                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
+
+        # 如果 enable_character 不为空，修改 voices_dir
+        if cvc.enable_character:
+            enable_dir = voices_dir / cvc.enable_character
+            if enable_dir.exists() and self._has_audio_files(enable_dir):
+                self.config.voice.voices_dir = f"voices/{cvc.enable_character}"
+                self.ctx.logger.info("voices_dir 已修改为: %s", self.config.voice.voices_dir)
+            else:
+                self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
+
+    def _has_audio_files(self, directory: Path) -> bool:
+        """检查目录是否有音频文件。"""
+        if not directory.exists():
+            return False
+        audio_files = list(directory.glob("*.wav")) + list(directory.glob("*.mp3")) + list(directory.glob("*.ogg"))
+        return len(audio_files) > 0
+
+    async def _crawl_arknights_voice(self, character_name: str, output_dir: str) -> dict:
+        """启动明日方舟语音爬虫。"""
+        try:
+            from crawlers.arknights_crawler.settings import CrawlerSettings
+            from crawlers.arknights_crawler.spiders.voice_spider import VoiceSpider
+
+            settings = CrawlerSettings(output_dir=output_dir)
+            spider = VoiceSpider(settings)
+            return await spider.run(operator_name=character_name, output_dir=output_dir)
+        except Exception as e:
+            self.ctx.logger.error("明日方舟爬虫异常: %s", e)
+            return {"success": False, "error": str(e)}
+
+    async def _crawl_blue_archive_voice(self, character_name: str, output_dir: str) -> dict:
+        """启动蔚蓝档案语音爬虫。"""
+        try:
+            from crawlers.blue_archive_crawler.settings import CrawlerSettings
+            from crawlers.blue_archive_crawler.spiders.voice_spider import VoiceSpider
+
+            settings = CrawlerSettings(output_dir=output_dir)
+            # 加载学生映射
+            crawler_dir = Path(__file__).parent / "crawlers" / "blue_archive_crawler"
+            settings.load_student_mapping(crawler_dir)
+
+            student_id = settings.find_student_id(character_name)
+            if not student_id:
+                return {"success": False, "error": "search fail"}
+
+            spider = VoiceSpider(settings)
+            result = await spider.crawl(
+                student_name=character_name,
+                student_id=student_id,
+                output_dir=output_dir,
+            )
+            return {
+                "success": result.failed == 0 and result.downloaded > 0,
+                "voice_count": result.downloaded,
+                "save_path": f"{output_dir}/{character_name}",
+                "error": "; ".join(result.errors[:3]) if result.errors else "",
+            }
+        except Exception as e:
+            self.ctx.logger.error("蔚蓝档案爬虫异常: %s", e)
+            return {"success": False, "error": str(e)}
 
     async def _load_voices(self) -> None:
         voices_dir_str = self.config.voice.voices_dir
