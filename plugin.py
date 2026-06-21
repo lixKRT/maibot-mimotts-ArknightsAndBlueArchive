@@ -419,7 +419,7 @@ class AIVoicePlugin(MaiBotPlugin):
 
         self.ctx.logger.info("Voices dir exists: %s, contents: %s", voices_dir, [f.name for f in voices_dir.iterdir()])
 
-        audio_files = list(voices_dir.glob("*.wav")) + list(voices_dir.glob("*.mp3"))
+        audio_files = list(voices_dir.glob("*.wav")) + list(voices_dir.glob("*.mp3")) + list(voices_dir.glob("*.ogg"))
         if not audio_files:
             self.ctx.logger.warning("No audio files found in: %s", voices_dir)
             return
