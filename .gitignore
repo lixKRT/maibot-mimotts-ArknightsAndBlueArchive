@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+
+# 配置（包含 API Key）
+config.toml
+config_back/
+
+# 音频资源（太大，不适合提交）
+voices/
+
+# 日志
+*.log
+
+# IDE
+.vscode/
+.idea/

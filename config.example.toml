@@ -12,7 +12,7 @@ default_voice = ""
 clone_voice = ""
 
 [character_voice_clone]
-enable_character = ""
+enable_character = "柯伊"
 character_language = "cn"
 Arknights_character = "桃金娘，铃兰"
 BlueArchive_character = "爱丽丝，柯伊"
