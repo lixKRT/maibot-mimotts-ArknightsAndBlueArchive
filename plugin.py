@@ -199,9 +199,50 @@ class AIVoicePlugin(MaiBotPlugin):
 
                 self.config.voice.voices_dir = f"voices/{cvc.enable_character}/voice/{lang}"
                 self.config.voice.default_voice = "Synthetic_Audio"
+                self._update_config_file(voices_dir=f"voices/{cvc.enable_character}/voice/{lang}", default_voice="Synthetic_Audio")
                 self.ctx.logger.info("voices_dir 已修改为: %s, default_voice: Synthetic_Audio", self.config.voice.voices_dir)
             else:
                 self.ctx.logger.warning("enable_character「%s」的音频目录不存在或为空", cvc.enable_character)
+        else:
+            # enable_character 为空时，恢复默认值
+            self.config.voice.voices_dir = "voices"
+            self.config.voice.default_voice = ""
+            self._update_config_file(voices_dir="voices", default_voice="")
+
+    def _update_config_file(self, voices_dir: str = None, default_voice: str = None) -> None:
+        """直接修改 config.toml 文件中的配置。
+
+        Args:
+            voices_dir: 新的 voices_dir 值
+            default_voice: 新的 default_voice 值
+        """
+        import toml
+
+        plugin_dir = Path(__file__).parent
+        config_path = plugin_dir / "config.toml"
+
+        if not config_path.exists():
+            return
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = toml.load(f)
+
+            # 确保 voice section 存在
+            if "voice" not in config:
+                config["voice"] = {}
+
+            if voices_dir is not None:
+                config["voice"]["voices_dir"] = voices_dir
+            if default_voice is not None:
+                config["voice"]["default_voice"] = default_voice
+
+            with open(config_path, "w", encoding="utf-8") as f:
+                toml.dump(config, f)
+
+            self.ctx.logger.info("config.toml 已更新: voices_dir=%s, default_voice=%s", voices_dir, default_voice)
+        except Exception as e:
+            self.ctx.logger.error("更新 config.toml 失败: %s", e)
 
     async def _synthesize_audio(self, char_dir: Path, max_size_mb: float) -> None:
         """将角色目录下的所有音频合成为一个 MP3 文件。
