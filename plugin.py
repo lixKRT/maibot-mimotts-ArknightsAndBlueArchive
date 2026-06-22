@@ -149,31 +149,35 @@ class AIVoicePlugin(MaiBotPlugin):
         # 始终使用基础 voices 目录，而不是当前的 voices_dir（可能已被修改）
         voices_dir = plugin_dir / "voices"
 
-        # 解析角色列表
+        # 只检查 enable_character 是否有音频
+        if not cvc.enable_character:
+            return
+
+        char_dir = voices_dir / cvc.enable_character
+        if self._has_audio_files(char_dir):
+            self.ctx.logger.info("角色「%s」已有音频资源，跳过爬取", cvc.enable_character)
+            return
+
+        # 判断是哪个游戏的角色
         arknights_chars = [c.strip() for c in cvc.Arknights_character.replace("，", ",").split(",") if c.strip()]
         ba_chars = [c.strip() for c in cvc.BlueArchive_character.replace("，", ",").split(",") if c.strip()]
 
-        # 检查并爬取明日方舟角色
-        for char_name in arknights_chars:
-            char_dir = voices_dir / char_name
-            if not self._has_audio_files(char_dir):
-                self.ctx.logger.info("角色「%s」无音频资源，启动明日方舟爬虫...", char_name)
-                result = await self._crawl_arknights_voice(char_name, str(voices_dir))
-                if result.get("success"):
-                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
-                else:
-                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
-
-        # 检查并爬取蔚蓝档案角色
-        for char_name in ba_chars:
-            char_dir = voices_dir / char_name
-            if not self._has_audio_files(char_dir):
-                self.ctx.logger.info("角色「%s」无音频资源，启动蔚蓝档案爬虫...", char_name)
-                result = await self._crawl_blue_archive_voice(char_name, str(voices_dir))
-                if result.get("success"):
-                    self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", char_name, result.get("voice_count", 0))
-                else:
-                    self.ctx.logger.warning("角色「%s」爬取失败: %s", char_name, result.get("error", "未知错误"))
+        if cvc.enable_character in arknights_chars:
+            self.ctx.logger.info("角色「%s」无音频资源，启动明日方舟爬虫...", cvc.enable_character)
+            result = await self._crawl_arknights_voice(cvc.enable_character, str(voices_dir))
+            if result.get("success"):
+                self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", cvc.enable_character, result.get("voice_count", 0))
+            else:
+                self.ctx.logger.warning("角色「%s」爬取失败: %s", cvc.enable_character, result.get("error", "未知错误"))
+        elif cvc.enable_character in ba_chars:
+            self.ctx.logger.info("角色「%s」无音频资源，启动蔚蓝档案爬虫...", cvc.enable_character)
+            result = await self._crawl_blue_archive_voice(cvc.enable_character, str(voices_dir))
+            if result.get("success"):
+                self.ctx.logger.info("角色「%s」爬取成功: %d 个语音", cvc.enable_character, result.get("voice_count", 0))
+            else:
+                self.ctx.logger.warning("角色「%s」爬取失败: %s", cvc.enable_character, result.get("error", "未知错误"))
+        else:
+            self.ctx.logger.error("角色「%s」不在已配置的角色列表中", cvc.enable_character)
 
         # 如果 enable_character 不为空，为每个语言文件夹合成音频
         if cvc.enable_character:
