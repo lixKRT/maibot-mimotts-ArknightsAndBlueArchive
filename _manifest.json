@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
-  "id": "Emilia-awa.maibot-mimotts-voice",
-  "name": "MiMo TTS Voice Clone",
-  "version": "1.6.0",
-  "description": "MiMo TTS Voice Clone Plugin for MaiBot - AI语音回复插件，支持自定义音色克隆和风格控制",
+  "id": "lixKRT.maibot-mimotts-arknights-bluearchive",
+  "name": "MiMo TTS Arknights And BlueArchive Voice Plugin",
+  "version": "2.0.0",
+  "description": "MiMo TTS Voice Clone Plugin for MaiBot - AI语音回复插件，支持自定义音色克隆、风格控制，以及蔚蓝档案和明日方舟角色语音克隆",
   "author": {
     "name": "Emilia-awa",
     "url": "https://github.com/Emilia-awa"
