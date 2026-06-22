@@ -355,11 +355,8 @@ class AIVoicePlugin(MaiBotPlugin):
                 segment = AudioSegment.from_file(audio_file)
                 # 检查合并后时长是否超出上限
                 if len(combined) + len(segment) > max_duration_ms:
-                    # 如果当前时长已在允许范围内（距上限差值 <= 1MB），停止添加
-                    if len(combined) >= min_duration_ms:
-                        break
-                    # 如果当前时长不足最小值，继续添加（允许略微超过上限）
-                    # 但不能超过太多（最多再加一个片段）
+                    # 绝对不能超过上限，停止添加
+                    break
 
                 combined = segment + combined  # 插入到前面（保持后面的优先）
                 used_files.append(audio_file.name)
