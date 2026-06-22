@@ -153,9 +153,13 @@ class AIVoicePlugin(MaiBotPlugin):
         if not cvc.enable_character:
             return
 
-        char_dir = voices_dir / cvc.enable_character
-        if self._has_audio_files(char_dir):
-            self.ctx.logger.info("角色「%s」已有音频资源，跳过爬取", cvc.enable_character)
+        # 检查 voices/{enable_character}/voice/{character_language}/ 目录
+        lang = cvc.character_language
+        if lang not in ["cn", "jp", "kr", "en"]:
+            lang = "cn"
+        lang_dir = voices_dir / cvc.enable_character / "voice" / lang
+        if self._has_audio_files(lang_dir):
+            self.ctx.logger.info("角色「%s」语言「%s」已有音频资源，跳过爬取", cvc.enable_character, lang)
             return
 
         # 判断是哪个游戏的角色
